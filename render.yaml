@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: video-translator
+    env: python
+    buildCommand: "apt-get update && apt-get install -y ffmpeg && pip install -r requirements.txt"
+    startCommand: "gunicorn app:app --timeout 300 --workers 1"
+    envVars:
+      - key: ANTHROPIC_API_KEY
+        sync: false
+    disk:
+      name: tmp-storage
+      mountPath: /tmp
+      sizeGB: 10
