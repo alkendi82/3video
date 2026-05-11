@@ -4,7 +4,7 @@ import uuid
 import subprocess
 import tempfile
 import base64
-import google.generativeai as genai
+from google import genai
 from flask import Flask, request, jsonify, send_file, render_template
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
@@ -15,7 +15,7 @@ CORS(app)
 app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024
 UPLOAD_FOLDER = tempfile.gettempdir()
 
-genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
+client_gemini = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
 
 LANG_NAMES = {
     "ar": "العربية", "en": "الإنجليزية", "fr": "الفرنسية",
@@ -64,7 +64,6 @@ def translate():
     try:
         file.save(input_path)
 
-        # Get duration
         result = subprocess.run([
             "ffprobe", "-v", "error", "-show_entries", "format=duration",
             "-of", "json", input_path
@@ -76,7 +75,6 @@ def translate():
         except:
             pass
 
-        # Extract audio
         audio_cmd = [
             ffmpeg, "-i", input_path,
             "-vn", "-ar", "16000", "-ac", "1",
@@ -86,12 +84,8 @@ def translate():
         if proc.returncode != 0:
             return jsonify({"error": "فشل استخراج الصوت"}), 500
 
-        # Read audio as base64
         with open(audio_path, "rb") as f:
             audio_b64 = base64.b64encode(f.read()).decode("utf-8")
-
-        # Send to Gemini
-        model = genai.GenerativeModel("gemini-1.5-flash-latest")
 
         prompt = f"""أنت نظام لتفريغ الصوت وترجمته.
 مهمتك:
@@ -99,7 +93,7 @@ def translate():
 2. قسّمه إلى أجزاء زمنية (كل 3-5 ثوانٍ)
 3. ترجم كل جزء إلى {tgt_name}
 
-أجب فقط بـ JSON صالح بدون أي نص إضافي أو backticks:
+أجب فقط بـ JSON صالح بدون أي نص إضافي:
 {{"segments":[{{"start":0,"end":3000,"original":"النص الأصلي","translated":"الترجمة"}}]}}
 
 - start و end بالميلي ثانية
@@ -107,10 +101,18 @@ def translate():
 - اللغة المصدر: {src_lang}
 - لا تضف مقاطع صامتة"""
 
-        response = model.generate_content([
-            {"mime_type": "audio/mp3", "data": audio_b64},
-            prompt
-        ])
+        response = client_gemini.models.generate_content(
+            model="gemini-2.0-flash-lite",
+            contents=[
+                genai.types.Content(parts=[
+                    genai.types.Part(inline_data=genai.types.Blob(
+                        mime_type="audio/mp3",
+                        data=audio_b64
+                    )),
+                    genai.types.Part(text=prompt)
+                ])
+            ]
+        )
 
         raw = response.text
         parsed = json.loads(raw.replace("```json", "").replace("```", "").strip())
@@ -119,7 +121,6 @@ def translate():
         if not segments:
             return jsonify({"error": "لم يُعثر على كلام في الفيديو"}), 400
 
-        # Build SRT
         srt_content = "\n\n".join(
             f"{i+1}\n{ms_to_srt(seg['start'])} --> {ms_to_srt(seg['end'])}\n{seg['translated']}"
             for i, seg in enumerate(segments)
@@ -128,7 +129,6 @@ def translate():
         with open(srt_path, "w", encoding="utf-8") as f:
             f.write(srt_content)
 
-        # Style
         if style == "yellow":
             force_style = "FontName=Arial,FontSize=22,PrimaryColour=&H0000FFFF,OutlineColour=&H00000000,Outline=2,Bold=1,Alignment=2,MarginV=25"
         elif style == "shadow":
@@ -136,7 +136,6 @@ def translate():
         else:
             force_style = "FontName=Arial,FontSize=22,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=2,Alignment=2,MarginV=25"
 
-        # Burn subtitles
         sub_filter = f"subtitles={srt_path}:force_style='{force_style}'"
         ffmpeg_cmd = [
             ffmpeg, "-i", input_path,
