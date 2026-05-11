@@ -4,7 +4,7 @@ import uuid
 import subprocess
 import tempfile
 import base64
-import anthropic
+import google.generativeai as genai
 from flask import Flask, request, jsonify, send_file, render_template
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
@@ -15,7 +15,7 @@ CORS(app)
 app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024
 UPLOAD_FOLDER = tempfile.gettempdir()
 
-client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
 
 LANG_NAMES = {
     "ar": "العربية", "en": "الإنجليزية", "fr": "الفرنسية",
@@ -64,10 +64,9 @@ def translate():
     try:
         file.save(input_path)
 
-        # Get video duration
+        # Get duration
         result = subprocess.run([
-            ffmpeg.replace("ffmpeg", "ffprobe") if "ffmpeg" in ffmpeg else "ffprobe",
-            "-v", "error", "-show_entries", "format=duration",
+            "ffprobe", "-v", "error", "-show_entries", "format=duration",
             "-of", "json", input_path
         ], capture_output=True, text=True)
         duration_ms = 60000
@@ -77,7 +76,7 @@ def translate():
         except:
             pass
 
-        # Extract audio as MP3
+        # Extract audio
         audio_cmd = [
             ffmpeg, "-i", input_path,
             "-vn", "-ar", "16000", "-ac", "1",
@@ -85,46 +84,35 @@ def translate():
         ]
         proc = subprocess.run(audio_cmd, capture_output=True, text=True)
         if proc.returncode != 0:
-            return jsonify({"error": "فشل استخراج الصوت: " + proc.stderr[-200:]}), 500
+            return jsonify({"error": "فشل استخراج الصوت"}), 500
 
         # Read audio as base64
         with open(audio_path, "rb") as f:
             audio_b64 = base64.b64encode(f.read()).decode("utf-8")
 
-        # Send audio to Claude
-        response = client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=4000,
-            system=f"""أنت نظام لتفريغ الصوت وترجمته.
+        # Send to Gemini
+        model = genai.GenerativeModel("gemini-1.5-flash")
+
+        prompt = f"""أنت نظام لتفريغ الصوت وترجمته.
 مهمتك:
-1. استمع للصوت المرفق وفرّغ كل الكلام
+1. استمع للصوت وفرّغ كل الكلام
 2. قسّمه إلى أجزاء زمنية (كل 3-5 ثوانٍ)
 3. ترجم كل جزء إلى {tgt_name}
 
-أجب فقط بـ JSON صالح بدون أي نص إضافي:
+أجب فقط بـ JSON صالح بدون أي نص إضافي أو backticks:
 {{"segments":[{{"start":0,"end":3000,"original":"النص الأصلي","translated":"الترجمة"}}]}}
 
 - start و end بالميلي ثانية
 - مدة الصوت التقريبية: {duration_ms}ms
 - اللغة المصدر: {src_lang}
-- لا تضف مقاطع صامتة""",
-            messages=[{
-                "role": "user",
-                "content": [
-                    {
-                        "type": "document",
-                        "source": {
-                            "type": "base64",
-                            "media_type": "audio/mp3",
-                            "data": audio_b64
-                        }
-                    },
-                    {"type": "text", "text": f"فرّغ وترجم هذا الصوت إلى {tgt_name}"}
-                ]
-            }]
-        )
+- لا تضف مقاطع صامتة"""
 
-        raw = response.content[0].text
+        response = model.generate_content([
+            {"mime_type": "audio/mp3", "data": audio_b64},
+            prompt
+        ])
+
+        raw = response.text
         parsed = json.loads(raw.replace("```json", "").replace("```", "").strip())
         segments = parsed.get("segments", [])
 
@@ -161,7 +149,7 @@ def translate():
 
         proc = subprocess.run(ffmpeg_cmd, capture_output=True, text=True)
         if proc.returncode != 0:
-            return jsonify({"error": "فشل دمج الترجمة: " + proc.stderr[-200:]}), 500
+            return jsonify({"error": "فشل دمج الترجمة"}), 500
 
         return send_file(
             output_path,
