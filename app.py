@@ -37,6 +37,17 @@ def get_ffmpeg():
     except:
         return "ffmpeg"
 
+def get_gemini_model():
+    try:
+        models = list(client_gemini.models.list())
+        for m in models:
+            name = m.name
+            if "flash" in name and "gemini" in name:
+                return name.replace("models/", "")
+        return models[0].name.replace("models/", "")
+    except:
+        return "gemini-1.5-flash"
+
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -101,8 +112,10 @@ def translate():
 - اللغة المصدر: {src_lang}
 - لا تضف مقاطع صامتة"""
 
+        gemini_model = get_gemini_model()
+
         response = client_gemini.models.generate_content(
-            model="gemini-2.0-flash-lite",
+            model=gemini_model,
             contents=[
                 genai.types.Content(parts=[
                     genai.types.Part(inline_data=genai.types.Blob(
