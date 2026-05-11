@@ -91,7 +91,7 @@ def translate():
             audio_b64 = base64.b64encode(f.read()).decode("utf-8")
 
         # Send to Gemini
-        model = genai.GenerativeModel("gemini-1.5-pro")
+        model = genai.GenerativeModel("gemini-1.5-flash-latest")
 
         prompt = f"""أنت نظام لتفريغ الصوت وترجمته.
 مهمتك:
